@@ -1,0 +1,27 @@
+{
+  "name": "id-source-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Foundation side of the ID source attribution POC: key generation (and later decryption). Implements ../SPEC.md.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "keygen": "tsx src/cli.ts keygen",
+    "decrypt": "tsx src/cli.ts decrypt",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@noble/ciphers": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "@noble/post-quantum": "0.7.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

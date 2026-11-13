@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npx tsc *)",
+      "Bash(npx vitest *)",
+      "Bash(npm run *)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(node -e 'const p=require\\(\"../exchange/foundation-public-key.json\"\\); console.log\\({kid:p.kid, suite:p.suite, publicKey:p.publicKey.slice\\(0,24\\)+\"…\\(\"+p.publicKey.length+\" chars\\)\"}\\)')",
+      "Bash(node -e 'const s=require\\(\"./keys/private-keys.json\"\\); console.log\\(s.keys.map\\(k=>\\({kid:k.kid, createdAt:k.createdAt, secretKey:\"<\"+k.secretKey.length+\" chars>\"}\\)\\)\\)')"
+    ]
+  }
+}

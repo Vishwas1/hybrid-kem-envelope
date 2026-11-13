@@ -1,0 +1,5 @@
+node_modules/
+# Foundation private keys — never commit (SPEC §3.2)
+server/keys/
+# Generated exchange artefacts
+exchange/
