@@ -568,17 +568,24 @@ attributionMessage = {
 
 ### Step 4 — Encrypted Attribution is Sent to the IdP
 
-IDApp already initiates identity creation by constructing the **OIDC authorization request** to the selected IdP. The encrypted attribution data can be added to this request as an additional parameter for example:
+IDApp already initiates identity creation by constructing the **OIDC authorization request** to the selected IdP. The encrypted attribution data can be added to this request as an additional parameter, for example:
 
 ```json
 idRequestSource = {
   "version": 1,
-  "kid": "did:web:foundation#encryption-key-2",
-  "encryptedData": "<encrypted-attribution-message>"
+  "kid": "did:web:concordium.com#encryption-key-1",
+  "encryptedData": {
+    "suite": "XWING-HKDF-SHA256-AES256GCM",
+    "kemCiphertext": "<base64url, 1120 bytes>",
+    "salt": "<base64url, 32 bytes>",
+    "iv": "<base64url, 12 bytes>",
+    "ciphertext": "<base64url>",
+    "tag": "<base64url, 16 bytes>"
+  }
 }
 ```
 
-This object can be encoded, for example using Base64URL, and passed through the existing identity creation URL as `idRequestSource`.
+This object is serialized as JSON, encoded using base64url without padding, and passed through the existing identity creation URL as `idRequestSource`. The encoded value contains only the characters `A–Z`, `a–z`, `0–9`, `-` and `_`, so URL encoding leaves it unchanged.
 Conceptually:
 
 ```plain
@@ -621,14 +628,21 @@ https://<idp>/authorize
 IDP can perform its normal identity verification and issuance process, but cannot decrypt the attribution value or determine that the request originated from [`armenianwinecellar.co.uk`](http://armenianwinecellar.co.uk).
 ### Step 5 — IdP Records Successful Identity Issuance
 
-The IdP can decode the outer `idRequestSource` structure to read metadata such as `version` and `kid`, but `encryptedData` remains opaque. 
+The IdP can decode the outer `idRequestSource` structure and read metadata such as `version`, `kid` and `suite`. The remaining `encryptedData` fields are opaque to it. 
 For example, the IdP may see:
 
 ```json
 idRequestSource = {
   "version": 1,
-  "kid": "did:web:foundation#encryption-key-2",
-  "encryptedData": "eyJ..."
+  "kid": "did:web:concordium.com#encryption-key-1",
+  "encryptedData": {
+    "suite": "XWING-HKDF-SHA256-AES256GCM",
+    "kemCiphertext": "Xq3v...",
+    "salt": "p0Lk...",
+    "iv": "Zt9a...",
+    "ciphertext": "bR7c...",
+    "tag": "Hw2e..."
+  }
 }
 ```
 
@@ -636,9 +650,10 @@ but cannot recover the original attribution message:
 
 ```json
 attributionMessage = {
+  "version": 1,
   "source": "armenianwinecellar.co.uk",
+  "sourceStatus": "verified",
   "purpose": "verification",
-  "sourceStatus": "verified"
   "requestId": "..."
 }
 ```
@@ -660,10 +675,19 @@ Foundation receives the encoded `idRequestSource` and decodes the outer structur
 ```json
 {
   "version": 1,
-  "kid": "did:web:foundation#encryption-key-2",
-  "encryptedData": "<encrypted-attribution-message>"
+  "kid": "did:web:concordium.com#encryption-key-1",
+  "encryptedData": {
+    "suite": "XWING-HKDF-SHA256-AES256GCM",
+    "kemCiphertext": "<base64url, 1120 bytes>",
+    "salt": "<base64url, 32 bytes>",
+    "iv": "<base64url, 12 bytes>",
+    "ciphertext": "<base64url>",
+    "tag": "<base64url, 16 bytes>"
+  }
 }
 ```
+
+Foundation checks that the envelope contains exactly these fields with valid types and sizes, that `version` is `1`, and that `suite` is supported. Otherwise the record is rejected.
 
 At this stage, the Foundation has the key identifier and encrypted attribution message, but no user information from the IdP.
 
@@ -672,18 +696,22 @@ At this stage, the Foundation has the key identifier and encrypted attribution m
 Foundation reads `kid` to determine which encryption key was originally used by IDApp:
 
 ```bash
-kid = did:web:foundation#encryption-key-2
+kid = did:web:concordium.com#encryption-key-1
 ```
 
-Foundation then selects the corresponding private key from its key-management system.
+Foundation then selects the corresponding private key from its key-management system. If no private key exists for that `kid`, the record is rejected.
 
 Keeping `kid` with each record is important for **key rotation**: records encrypted using an older public key can still be decrypted using the corresponding retained private key.
 
 #### Step 3 - Decrypt the Attribution Message
 
-Foundation selects the private key identified by `kid` and combines it with IDApp’s temporary public key to calculate the same shared secret. It then applies HKDF-SHA-256 with the same parameters to derive the symmetric key.
+Foundation uses the private key identified by `kid` to run X-Wing **decapsulation** on `kemCiphertext`. This recovers the same 32-byte shared secret that IDApp obtained during encryption. Foundation then applies HKDF-SHA-256 with the same `salt` and `info` value to derive the AES key.
 
-Foundation uses that key to verify the AES-GCM authentication tag and decrypt the message. If verification fails, the record is rejected.
+Foundation rebuilds the associated data from the envelope's `version`, `kid` and `suite`, and uses the AES key to verify the AES-GCM authentication tag and decrypt the message. If verification fails, the record is rejected.
+
+X-Wing decapsulation does not fail on a modified `kemCiphertext`; it returns an unrelated secret instead. Any tampering with the envelope is therefore detected at the authentication-tag check.
+
+Finally, Foundation validates the decrypted message against the attribution message rules (see 3.1) and rejects it if any field is missing, unknown or invalid.
 
 After successful decryption, Foundation recovers the original attribution message:
 
@@ -691,8 +719,8 @@ After successful decryption, Foundation recovers the original attribution messag
 {
   "version": 1,
   "source": "armenianwinecellar.co.uk",
-  "purpose": "verification",
   "sourceStatus": "verified",
+  "purpose": "verification",
   "requestId": "<unique-request-id>"
 }
 ```
@@ -701,7 +729,7 @@ This tells Foundation that the successful identity creation originated from [`ar
 
 #### Step 4 - Aggregate the Results
 
-Foundation processes the decrypted records and aggregates successful identity creations by source and, if required, purpose.
+Foundation processes the decrypted records and aggregates successful identity creations by source and, if required, purpose. Records with the same `requestId` are counted once, because a retry of the same attribution event reuses its `requestId`.
 
 For example:
 
