@@ -435,47 +435,41 @@ Where:
 
 #### 3.2 Retrieve the Foundation Public Key
 
-The Foundation publishes an encryption key through its **DID Document** hosted at a well-known HTTPS location on its official domain.
-IDApp is configured with the trusted document URL, for example:
-`https://<foundation-domain>/.well-known/did.json`
-For this web-hosted approach, the document uses a DID of the form `did:web:<foundation-domain>`.
+The Foundation publishes its current attribution encryption key as a small **public-key file** in JSON. It is not published in a DID Document.
 
-IDApp retrieves the DID Document directly from this location over HTTPS, checks that its `id` matches the expected Foundation DID, and selects the public key designated for attribution encryption under `keyAgreement`.
+A DID Document is not used because no standard DID verification-method format exists yet for post-quantum keys such as ML-KEM or X-Wing. Neither a JWK `kty` nor a Multikey multicodec has been defined for them. Contributing such a format is tracked separately in the Decision Log.
 
-The document exposes the public-key material through a verification method using `publicKeyJwk`. The following example is illustrative; the encryption algorithm and corresponding JWK fields will be finalized during implementation:
+The public-key file has the following format:
 
 ```json
 {
-  "id": "did:web:<foundation-domain>",
-  "keyAgreement": [
-    "did:web:<foundation-domain>#encryption-key-2"
-  ],
-  "verificationMethod": [
-    {
-      "id": "did:web:<foundation-domain>#encryption-key-2",
-      "controller": "did:web:<foundation-domain>",
-      "type": "JsonWebKey2020",
-      "publicKeyJwk": {
-        "kty": "OKP",
-        "crv": "X25519",
-        "x": "BASE64URL_ENCODED_PUBLIC_KEY"
-      }
-    }
-  ]
+  "kid": "did:web:concordium.com#encryption-key-1",
+  "suite": "XWING-HKDF-SHA256-AES256GCM",
+  "publicKey": "51saY5A2XEMF0...VQ"
 }
 ```
 
-This initial approach relies on the configured Foundation domain and HTTPS to authenticate the document.
+Where:
+*   `kid` identifies the key. It is an opaque string of at most 256 printable ASCII characters. It is written as a DID URL so that the format can move to a DID Document later without changing key identifiers.
+*   `suite` identifies the encryption construction the key belongs to (see 3.3). IDApp MUST reject the file if it does not support the suite.
+*   `publicKey` is the Foundation's X-Wing public key, base64url-encoded without padding. It MUST decode to exactly 1,216 bytes, or IDApp MUST reject the file.
 
-**Key rotation** is supported by updating the published document with a new public key and a new key identifier, without changing the document URL. IDApp retrieves the current key from this stable location rather than hard-coding the public key. Any cached document must be refreshed according to a defined cache policy.
+The file holds only the **current** key. Private keys are never published. Foundation keeps them separately in its key store, including all previous keys.
 
-The encrypted attribution record carries the selected verification method’s `id` as `kid`, for example:
+IDApp is configured with the trusted HTTPS location (such as Wallet Proxy) of this file on the Foundation's official domain. It retrieves the file from there rather than hard-coding the public key. This initial approach relies on the configured Foundation domain and HTTPS to authenticate the file.
+
+**Key rotation** works as follows:
+*   Foundation generates a new key pair, adds the private key to its key store, and replaces the published file with the new `kid` and `publicKey`. The file location does not change.
+*   IDApp picks up the new key the next time it retrieves the file. Any cached copy must be refreshed.
+*   Foundation might keep previous private keys so that pending attribution records encrypted with older keys can still be decrypted.
+
+The encrypted attribution record carries the file's `kid`, for example:
 
 ```gherkin
-kid = did:web:<foundation-domain>#encryption-key-2
+kid = did:web:concordium.com#encryption-key-1
 ```
 
-This allows Foundation to select the corresponding private key for decryption after a rotation. Foundation must retain previous private keys for a defined grace period to decrypt pending attribution records encrypted with older keys.
+This allows Foundation to select the corresponding private key for decryption after a rotation.
 
 #### 3.3 Encrypt the Attribution Message
 
