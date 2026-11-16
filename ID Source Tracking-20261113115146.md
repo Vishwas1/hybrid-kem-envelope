@@ -616,6 +616,8 @@ https://<idp>/authorize
   &idRequestSource=<encoded-encrypted-attribution>
 ```
 
+> **Note: Identity issuance request transport (proposed):** The post-quantum envelope is much larger than a classical one. The X-Wing KEM ciphertext alone is 1,120 bytes, and the encoded `idRequestSource` is about 2.6 KB. To accommodate this larger payload, we propose moving the IdP identity issuance request from the current GET-based flow to a POST-based flow, carrying the attribution data in the request body. This will require coordination with the IdP. The GET-based snippets above show the current flow and will be updated once the POST-based flow is agreed and implemented.
+
 IDP can perform its normal identity verification and issuance process, but cannot decrypt the attribution value or determine that the request originated from [`armenianwinecellar.co.uk`](http://armenianwinecellar.co.uk).
 ### Step 5 — IdP Records Successful Identity Issuance
 
