@@ -437,7 +437,7 @@ Where:
 
 The Foundation publishes its current attribution encryption key as a small **public-key file** in JSON. It is not published in a DID Document.
 
-A DID Document is not used because no standard DID verification-method format exists yet for post-quantum keys such as ML-KEM or X-Wing. Neither a JWK `kty` nor a Multikey multicodec has been defined for them. Contributing such a format is tracked separately in the Decision Log.
+A DID Document is not used because no standard DID verification-method format exists yet for post-quantum keys such as ML-KEM or X-Wing. Neither a JWK `kty` nor a Multikey multicodec has been defined for them.
 
 The public-key file has the following format:
 
@@ -473,28 +473,39 @@ This allows Foundation to select the corresponding private key for decryption af
 
 #### 3.3 Encrypt the Attribution Message
 
-IDApp encrypts the attribution message using the **Foundation’s public key** retrieved from its DID Document.
+IDApp encrypts the attribution message using the **Foundation's public key** retrieved from the public-key file (see 3.2).
 
-The encryption uses the following components:
+The encryption is **post-quantum**. It uses a hybrid key-encapsulation mechanism (KEM), so the message stays confidential as long as either the post-quantum or the classical algorithm remains unbroken.
+
+The encryption suite is identified as `XWING-HKDF-SHA256-AES256GCM` and uses the following components:
 
 | Component | Purpose |
 | ---| --- |
-| X25519 | Establishes a shared secret using IDApp’s temporary private key and Foundation’s public key. |
-| HKDF-SHA-256 | Derives a symmetric encryption key from the shared secret. |
+| X-Wing KEM (ML-KEM-768 + X25519) | Produces a fresh shared secret for eac–h message from Foundation's public key, plus a KEM ciphertext that only Foundation can turn back into the same secret. ML-KEM-768 (FIPS 203) gives post-quantum security; X25519 keeps classical security if ML-KEM is ever broken. |
+| HKDF-SHA-256 | Derives a 256-bit symmetric encryption key from the shared secret and a random salt. |
 | AES-256-GCM | Encrypts the attribution message using the derived key and provides integrity protection. |
 
-These components should be used through a reviewed encryption construction or library. 
+These components can be used through open-source [Noble](https://paulmillr.com/noble/) libraries:
+
+| Library | Used for |
+| ---| --- |
+| `@noble/post-quantum` | X-Wing (`ml_kem768_x25519`) |
+| `@noble/hashes` | HKDF-SHA-256 and secure random bytes |
+| `@noble/ciphers` | AES-256-GCM |
 
 **Encryption in IDApp**
-For each new encryption, IDApp: 
-1. Generates a fresh, temporary X25519 key pair.
-2. Combines its temporary private key with Foundation’s public key to calculate a shared secret.
-3. Uses HKDF-SHA-256 to derive a 256-bit symmetric encryption key.
-4. Encrypts the attribution message using AES-256-GCM with a fresh 96-bit nonce and a 128-bit authentication tag.
-5. Includes its temporary public key and the parameters required for decryption in the encrypted envelope. The temporary private key and derived secrets are discarded after use.
+For each new encryption, IDApp:
+1. Validates the public-key file (see 3.2) and the attribution message (see 3.1). If either is invalid, it stops.
+2. Serializes the attribution message as compact JSON, with keys in a fixed order: `version`, `source`, `sourceStatus`, `purpose`, `requestId`.
+3. Runs X-Wing encapsulation against Foundation's public key. This returns a 32-byte shared secret and a 1,120-byte KEM ciphertext.
+4. Generates a random 32-byte salt and uses HKDF-SHA-256 to derive a 256-bit AES key from the shared secret. The HKDF `info` value is the fixed string `concordium/id-source/v1/XWING-HKDF-SHA256-AES256GCM`.
+5. Encrypts the message using AES-256-GCM with a random 96-bit nonce (`iv`) and a 128-bit authentication tag.
+6. Builds the envelope, which includes the KEM ciphertext, salt and nonce Foundation needs for decryption.
+7. Discards the shared secret, derived key and plaintext from memory after use. IDApp must not log or store the plaintext message.
 
-The envelope’s version, encryption-suite identifier and `kid` are bound to the ciphertext through authenticated associated data.
-The encryption is **randomized**: independently encrypting the same attribution message produces different ciphertexts. This prevents the IdP from identifying repeated merchant sources by comparing ciphertext values alone; it does not eliminate correlation through other metadata.
+The envelope's `version`, `kid` and `suite` are bound to the ciphertext as authenticated associated data (AAD). Changing any of them makes decryption fail.
+
+The encryption is **randomized**. Every message gets a fresh encapsulation, salt and nonce, so independently encrypting the same attribution message produces unrelated ciphertexts. This prevents the IdP from identifying repeated merchant sources by comparing ciphertext values. It does not prevent correlation through other metadata, and the ciphertext length still reveals the length of `source` (see Challenges).
 
 For example:
 
@@ -507,43 +518,40 @@ Even when multiple requests originate from [`armenianwinecellar.co.uk`](http://a
 ```css
 armenianwinecellar.co.uk → ciphertext A
 armenianwinecellar.co.uk → ciphertext B
-armenianwinecellar.co.uk → ciphertext C 
+armenianwinecellar.co.uk → ciphertext C
 ```
 
-the ciphertexts must be different and unlinkable.
-The value passed to the IdP has the following illustrative structure: 
+the ciphertexts are different and unlinkable.
+
+The value passed to the IdP has the following structure:
 
 ```json
 idRequestSource = {
   "version": 1,
-  "kid": "did:web:foundation#encryption-key-2",
+  "kid": "did:web:concordium.com#encryption-key-1",
   "encryptedData": {
-    "suite": "X25519-HKDF-SHA256-AES256GCM",
-    "ephemeralPublicKey": {
-      "kty": "OKP",
-      "crv": "X25519",
-      "x": "<base64url-encoded-temporary-public-key>"
-    },
-    "salt": "<base64url-encoded-HKDF-salt>",
-    "iv": "<base64url-encoded-AES-GCM-nonce>",
-    "ciphertext": "<base64url-encoded-ciphertext>",
-    "tag": "<base64url-encoded-authentication-tag>"
+    "suite": "XWING-HKDF-SHA256-AES256GCM",
+    "kemCiphertext": "<base64url, 1120 bytes>",
+    "salt": "<base64url, 32 bytes>",
+    "iv": "<base64url, 12 bytes>",
+    "ciphertext": "<base64url, same length as the plaintext>",
+    "tag": "<base64url, 16 bytes>"
   }
 }
 ```
 
 Where:
-*   `version` identifies the format of the encrypted attribution data.
+*   `version` identifies the format of the envelope. It is separate from the attribution message's own `version`.
 *   `kid` identifies which Foundation public key was used, allowing Foundation to select the corresponding private key after key rotation.
 *   `encryptedData` contains the encrypted attribution message.
-    *   **suite** identifies the agreed cryptographic construction. The value above is illustrative.
-    *   **ephemeralPublicKey** is IDApp’s temporary public key, which Foundation needs to calculate the same shared secret.
+    *   **suite** identifies the encryption construction.
+    *   **kemCiphertext** is the X-Wing KEM ciphertext. Foundation uses it with its private key to recover the same shared secret. It replaces the temporary public key used in a plain X25519 design.
     *   **salt** is the public salt used by HKDF.
-    *   **iv** is the AES-GCM nonce, which must never be reused with the same symmetric key.
+    *   **iv** is the AES-GCM nonce.
     *   **ciphertext** contains the encrypted attribution message.
-    *   **tag** allows Foundation to detect modification of the ciphertext or authenticated associated data.
+    *   **tag** allows Foundation to detect modification of the ciphertext or the associated data.
 
-The temporary public key, salt and nonce are not secrets and can travel with the ciphertext.
+All binary values are base64url-encoded without padding. The envelope must contain exactly these fields, because extra fields would not be protected by the associated data. The KEM ciphertext, salt and nonce are not secrets and can travel with the ciphertext.
 
 After decryption, only the Foundation can recover the original attribution message:
 
@@ -551,11 +559,12 @@ After decryption, only the Foundation can recover the original attribution messa
 attributionMessage = {
   "version": 1,
   "source": "armenianwinecellar.co.uk",
-  "purpose": "verification",
   "sourceStatus": "verified",
+  "purpose": "verification",
   "requestId": "<unique-request-id>"
 }
 ```
+
 
 ### Step 4 — Encrypted Attribution is Sent to the IdP
 
