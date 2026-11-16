@@ -558,7 +558,7 @@ attributionMessage = {
   "version": 1,
   "source": "armenianwinecellar.co.uk",
   "purpose": "verification",
-  "sourceStatus": "verified"
+  "sourceStatus": "verified",
   "requestId": "<unique-request-id>"
 }
 ```
